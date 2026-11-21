@@ -48,11 +48,40 @@
    ```
    将原图、成品、`qa.json` 和 `review-manifest.json` 写入 `work/page01/render/`。重渲染时可用 `--out-dir` 指定新目录，`--baseline old.png` 可加入对照图。缺译、溢出等问题写入 `qa.json`，质检失败时命令返回非零。
 4. **擦除模式说明**：
-   默认 `--inpaint cpu`。`--inpaint auto` 优先使用已安装的 GPU 环境中的 LaMa，`--inpaint lama` 强制要求 GPU 环境。两种模式在检测到复杂背景或覆写指定 `erase = "lama"` 时调用 LaMa；纯 CPU 渲染遇到需要 LaMa 的单元时保留原图并记为质检失败。
+   默认使用 `--inpaint cpu`。`erase = "auto"` 在平坦背景上填色，在渐变背景上使用 Telea，遇到复杂纹理时请求 LaMa。`erase = "telea"` 始终使用 CPU Telea，即使已启用 LaMa。`--inpaint auto` 可在已安装的 GPU 环境中提供 LaMa，`--inpaint lama` 要求 GPU 环境。CPU 渲染遇到需要 LaMa 的单元时保留原图并记为质检失败。
 5. **核对审图指纹**：
    ```sh
    pixi run localization-kit image fingerprint --work-dir work/page01 --rendered work/page01/render/rendered.png
    ```
+
+### 用干净底图修复跨框文字
+
+厚描边、发光字或跨分格线的原文可先在 Photoshop 中修复，也可用修图脚本、智能体或外部模型生成底图。从原图按页面像素坐标裁出矩形，右边和下边坐标不包含在内。保留底图原尺寸与 RGB / RGBA 模式，RGBA 同时保留透明度。只改需要修复的像素，把尚未嵌入译文的 PNG 存为 `work/page01/retouch/b05.png`。
+
+在该页的 `overrides.toml` 中填写以下内容。示例裁片为 110 × 235 像素，`source_sha256` 换成该页 `analysis.json` 的 `image` 所指原文件的 SHA-256。
+
+```toml
+[units.b05]
+dst = "等等"
+
+[units.b05.clean_patch]
+file = "retouch/b05.png"
+bbox = [100, 960, 210, 1195]
+source_sha256 = "4ef4bd8eba4e032593d9ad98aba79f702e6bbda5cc0ddaa643b3d79acdcc5494"
+```
+
+```sh
+pixi run -e image python -c "from pathlib import Path; import hashlib; print(hashlib.sha256(Path('work/page01/original.png').read_bytes()).hexdigest())"
+pixi run localization-kit image render --work-dir work/page01 --inpaint cpu --out-dir work/page01/patched
+```
+
+裁片须覆盖该单元的部分或全部原文。改动可以重建本单元的边线，其他单元的原文、轮廓、已擦除或嵌字的像素以及跳过区域的保护边距均受保护。同一单元的 `clean_patch` 与 `erase` 互斥。`qa.json` 记录裁片文件、坐标、摘要、变化像素数及其中的边线像素数（`edge_pixels`）。修改译文、字号或字重后可复用同一裁片。替换裁片文件会改变页面指纹。
+
+### 审批前的视觉核对
+
+- 核对 `qa.json` 中的 `pass`、单元覆盖、保护区和额外改动、排版溢出、擦除边界指标。启用 `--readback` 时，日文残留与中文回读也计入 `pass`。
+- 对每个改动过或被反馈标记的单元，打开并放大 `crops/*.png`，对照左侧原图与右侧成品，检查原字残影、描边和阴影、分格线连续性、纹理接缝与译文位置。
+- `qa.pass == true` 表示本次运行的自动检查通过。确认局部修图质量后，再在工作台标记「通过」。
 
 ## 多页漫画流水线
 

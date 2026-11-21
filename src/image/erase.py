@@ -256,7 +256,9 @@ def erase_text(image, region: Region, font_px, requested="auto", *, inpaint_fn=N
     complex_background = (
         region.spread >= 65 and region.busy >= 0.25 and region.gradient >= 12
     )
-    external = mode == "lama" or (mode == "telea" and complex_background)
+    external = mode == "lama" or (
+        requested == "auto" and mode == "telea" and complex_background
+    )
     if external and inpaint_fn is None:
         return Erasure(image, np.zeros_like(region.safe), mode, True)
     core = grow(region.ink, max(1, min(3, round(font_px * 0.09)))) & region.erase_safe

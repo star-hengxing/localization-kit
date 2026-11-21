@@ -1,3 +1,4 @@
+import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor
 
@@ -268,6 +269,33 @@ def test_export_guards_whole_manifest_and_explicit_mode(book, tmp_path):
         with pytest.raises(SystemExit) as error:
             main(["export-text", flag, str(path), "--out", str(tmp_path / "out")])
         assert error.value.code == 2
+
+
+@pytest.mark.parametrize("target", ["page", "project", "unselected page"])
+def test_export_refuses_to_overwrite_configured_clean_patch(book, capsys, target):
+    (pid, first), (_, other) = resolve_pages(book)
+    owner = other if target == "unselected page" else first
+    patch = owner / "retouch" / "dialog.png"
+    patch.parent.mkdir()
+    Image.new("RGB", (8, 8), "white").save(patch)
+    previous = patch.read_bytes()
+    source_sha256 = hashlib.sha256((owner / "original.png").read_bytes()).hexdigest()
+    (first / "overrides.toml").write_text(
+        '[units.b01]\nsrc = "原文"\n', encoding="utf-8"
+    )
+    with (owner / "overrides.toml").open("a", encoding="utf-8") as f:
+        f.write(
+            '[units.b02.clean_patch]\nfile = "./retouch/dialog.png"\nbbox = [8, 75, 16, 83]\n'
+            f'source_sha256 = "{source_sha256}"\n'
+        )
+    args = (
+        ["--work-dir", str(first)]
+        if target == "page"
+        else ["--project", str(book), "--pages", pid]
+    )
+    assert main(["export-text", *args, "--out", str(patch)]) == 1
+    assert "overlaps page inputs" in capsys.readouterr().err
+    assert patch.read_bytes() == previous
 
 
 def test_concurrent_cache_flush_merges_only_new_readings(tmp_path):

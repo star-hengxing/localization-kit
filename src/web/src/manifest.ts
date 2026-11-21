@@ -1,5 +1,6 @@
 export type Box = readonly [number, number, number, number];
-export type Erase = "auto" | "flat" | "telea" | "keep";
+export const ERASE_MODES = ["auto", "flat", "telea", "keep", "lama"] as const;
+export type Erase = typeof ERASE_MODES[number] | "patch";
 export type Weight = "regular" | "medium" | "bold" | "heavy";
 export type UnitStatus = "rendered" | "skipped" | "failed";
 type Color = string | readonly [number, number, number];
@@ -10,6 +11,7 @@ export interface Unit {
   bbox: Box;
   status: UnitStatus;
   erase?: Erase;
+  crop?: string;
   weight?: Weight;
   font_size?: number;
   color?: Color;
@@ -47,7 +49,7 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export function isErase(value: unknown): value is Erase {
-  return value === "auto" || value === "flat" || value === "telea" || value === "keep";
+  return value === "patch" || ERASE_MODES.some((mode) => mode === value);
 }
 
 export function isWeight(value: unknown): value is Weight {
@@ -88,6 +90,17 @@ function imagePath(value: unknown, label: string): string {
     // Malformed percent escapes and unsafe paths use the same manifest error.
   }
   throw new Error(`${label}须为安全的相对路径`);
+}
+
+function cropPath(value: unknown): string {
+  const path = requiredString(value, "对比图路径");
+  const parts = path.replaceAll("\\", "/").replace(/^\.\//, "").split("/");
+  const reserved = /^(?:con|prn|aux|nul|conin\$|conout\$|(?:com|lpt)[1-9¹²³]) *(?:\.|$)/i;
+  if (/[:\u0000-\u001f\u007f]/.test(path) || parts.some((part) =>
+    !part || /[. ]$/.test(part) || reserved.test(part))) {
+    throw new Error("对比图路径须为安全的相对路径");
+  }
+  return path;
 }
 
 export function imageUrl(path: string, base: URL, fingerprint?: string): string | undefined {
@@ -165,6 +178,7 @@ function readPage(value: unknown): Page {
       bbox: readBox(raw.bbox, width, height, unitId),
       status,
       erase: isErase(raw.erase) ? raw.erase : undefined,
+      crop: "crop" in raw ? cropPath(raw.crop) : undefined,
       weight: isWeight(raw.weight) ? raw.weight : undefined,
       font_size: positiveInteger(raw.font_size) ? raw.font_size : undefined,
       color: color(raw.color),

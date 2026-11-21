@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import importlib.util
 import json
 import subprocess
@@ -168,17 +169,33 @@ def main(argv=None):
                 )
             result = _render(args)
         else:
+            from .render import load_render_inputs
             from .schema import load_work, source_image
             from .verify import fingerprint
 
             work = load_work(args.work_dir, args.translations)
             original = source_image(args.work_dir, work.analysis).read_bytes()
-            value = fingerprint(
-                original,
+            inputs = load_render_inputs(
+                args.work_dir,
                 work.analysis,
                 work.translations,
                 work.overrides,
+                hashlib.sha256(original).hexdigest(),
+            )
+            errors = [
+                f"{uid}: {patch}"
+                for uid, patch in inputs.patches.items()
+                if uid not in inputs.patch_hashes
+            ]
+            if errors:
+                raise ValueError("\n".join(errors))
+            value = fingerprint(
+                original,
+                work.analysis,
+                inputs.translations,
+                work.overrides,
                 args.rendered.read_bytes(),
+                patch_hashes=inputs.patch_hashes,
             )
             result = {"page": work.analysis["page"], "fingerprint": value}
     except (

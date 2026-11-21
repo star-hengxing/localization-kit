@@ -16,11 +16,13 @@ from .project import resolve_pages, select_pages
 from .schema import (
     box_slices,
     load_analysis,
+    load_overrides,
     load_work,
     skip_unit,
     source_image,
     staged_file,
     validate_overrides,
+    work_file,
 )
 from .typeset import MIN_FONT_SIZE, character_capacity, source_metrics
 
@@ -131,6 +133,26 @@ def translatable(text):
     return bool(JP_RE.search(text)) and not unreadable(text)
 
 
+def _overlaps_page_inputs(path, dest):
+    inputs = [
+        path / name
+        for name in ("analysis.json", "overrides.toml", "translations.jsonl")
+    ]
+    if any(dest == p.resolve() for p in [*inputs, *path.glob("original.*")]):
+        return True
+    if (
+        dest.is_relative_to(path)
+        and (path / "analysis.json").is_file()
+        and dest == source_image(path, load_analysis(path))
+    ):
+        return True
+    return any(
+        dest == work_file(path, style["clean_patch"]["file"], "clean_patch.file")
+        for style in load_overrides(path).get("units", {}).values()
+        if "clean_patch" in style
+    )
+
+
 def export_text(
     target_dir: Path,
     out_jsonl: Path,
@@ -157,19 +179,8 @@ def export_text(
         if pages is not None:
             raise ValueError("--pages requires a manga project")
         selection = all_pages = [(None, target)]
-    for _, path in all_pages:
-        inputs = [
-            path / name
-            for name in ("analysis.json", "overrides.toml", "translations.jsonl")
-        ]
-        if dest in {p.resolve() for p in [*inputs, *path.glob("original.*")]}:
-            raise ValueError("JSONL output overlaps page inputs")
-        if (
-            dest.is_relative_to(path)
-            and (path / "analysis.json").is_file()
-            and dest == source_image(path, load_analysis(path))
-        ):
-            raise ValueError("JSONL output overlaps page inputs")
+    if any(_overlaps_page_inputs(path, dest) for _, path in all_pages):
+        raise ValueError("JSONL output overlaps page inputs")
     count = 0
     with ExitStack() as stack:
         stream = None

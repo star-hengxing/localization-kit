@@ -131,6 +131,8 @@ def _validate_feedback(feedback):
             or not all(_timestamp(value) for value in timestamp.values())
         ):
             raise ValueError("Invalid feedback entry")
+        if entry.get("overrides", {}).get("erase") == "patch":
+            raise ValueError("patch is a display-only erase mode")
         key = (entry["page_id"], entry["unit_id"], fingerprint)
         if key in seen:
             raise ValueError("Duplicate feedback entry")

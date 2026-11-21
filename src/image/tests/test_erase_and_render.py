@@ -78,6 +78,30 @@ def test_flat_background_and_complex_background_are_distinguished():
     assert not result.mask.any()
     np.testing.assert_array_equal(result.pixels, complexity)
 
+    def inpaint(rgb, mask):
+        assert mask.any()
+        rgb[mask] = 80
+        return rgb
+
+    automatic = erase_text(complexity, region, 20, inpaint_fn=inpaint)
+    assert automatic.mode == "lama" and not automatic.needs_external_inpaint
+    assert np.all(automatic.pixels[automatic.mask] == 80)
+    explicit = erase_text(
+        complexity,
+        region,
+        20,
+        "telea",
+        inpaint_fn=lambda *_: pytest.fail("LaMa called"),
+    )
+    assert (
+        explicit.mode == "telea"
+        and explicit.mask.any()
+        and not explicit.needs_external_inpaint
+    )
+    np.testing.assert_array_equal(
+        explicit.pixels, erase_text(complexity, region, 20, "telea").pixels
+    )
+
 
 def test_flat_ink_recovers_clipped_glyph_and_keeps_detail_beside_artwork():
     shape = (132, 180)
@@ -313,6 +337,7 @@ action = "skip"
         manifest_unit["font_size"] == first["size"] and manifest_unit["qa_issues"] == []
     )
     for key in (
+        "crop",
         "erase",
         "src",
         "dst",

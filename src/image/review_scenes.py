@@ -15,21 +15,22 @@ from .schema import check_box
 KEEPALIVE_SECONDS = 15
 
 
+def _relative_asset_path(path):
+    if any(char in "\\:" or ord(char) < 32 or ord(char) == 127 for char in path) or any(
+        not part or part.endswith((".", " ")) or PureWindowsPath(part).is_reserved()
+        for part in path.split("/")
+    ):
+        raise ValueError("Unsafe relative asset path")
+    return path
+
+
 def request_path(target):
     path = unquote(target.partition("?")[0], errors="strict")
     if path == "/":
         return "index.html"
-    if not path.startswith("/") or any(
-        char in "\\:" or ord(char) < 32 or ord(char) == 127 for char in path
-    ):
+    if not path.startswith("/"):
         raise ValueError("Unsafe request path")
-    segments = path[1:].split("/")
-    if any(
-        not part or part.endswith((".", " ")) or PureWindowsPath(part).is_reserved()
-        for part in segments
-    ):
-        raise ValueError("Unsafe request path")
-    return "/".join(segments)
+    return _relative_asset_path(path[1:])
 
 
 def asset_file(root, name):
@@ -73,6 +74,15 @@ def _validate_page(page, directory):
         ):
             raise ValueError("Invalid review unit")
         check_box(unit.get("bbox"), size)
+        if "crop" in unit:
+            crop = unit["crop"]
+            if not has_text(crop):
+                raise ValueError("Invalid unit crop path")
+            # Rendered crop filenames contain literal %2F and %23 from quoted unit IDs.
+            asset_file(
+                directory,
+                _relative_asset_path(crop.replace("\\", "/").removeprefix("./")),
+            )
         ids.add(unit["id"])
     for entry in page.get("skipped", []):
         if not isinstance(entry, dict) or not has_text(entry.get("kind")):

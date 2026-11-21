@@ -183,6 +183,20 @@ def test_validates_feedback_size_and_structure_before_writing(preview):
     assert not (directory / "feedback.md").exists()
 
 
+def test_feedback_rejects_display_only_patch_erase(preview):
+    directory, request = preview
+    submission = _submission("擦字建议")
+    entry = submission["feedback"]["entries"][0]
+    entry["unit_id"] = "b01"
+    entry["overrides"] = {"erase": "patch"}
+    assert _post(request, submission)[0] == 400
+    assert not (directory / "feedback.json").exists()
+    entry["overrides"]["erase"] = "lama"
+    assert _post(request, submission)[0] == 200
+    saved = json.loads((directory / "feedback.json").read_bytes())
+    assert saved["entries"][0]["overrides"] == {"erase": "lama"}
+
+
 def test_post_merges_concurrent_entries_and_rejects_compact_iso(preview):
     directory, request = preview
     first = _submission("第一条")
@@ -295,7 +309,7 @@ def test_field_times_keep_legacy_edits_and_explicit_clears(preview):
     )
 
 
-def make_scene(path, passed=True):
+def make_scene(path, passed=True, *, units=()):
     path.mkdir(parents=True)
     page = {
         "id": "p1",
@@ -304,13 +318,67 @@ def make_scene(path, passed=True):
         "original": "page.png",
         "rendered": "page.png",
         "qa": {"pass": passed},
-        "units": [],
+        "units": units,
     }
     (path / "review-manifest.json").write_text(
         json.dumps({"version": 1, "title": path.name, "pages": [page]})
     )
     (path / "page.png").write_bytes(path.name.encode())
     return path
+
+
+@pytest.mark.parametrize(
+    "crop",
+    [
+        None,
+        42,
+        {},
+        "",
+        "  ",
+        "/abs.png",
+        r"\rooted.png",
+        r"\\host\share\x.png",
+        "C:/abs.png",
+        "C:drive.png",
+        "../x.png",
+        "crops/../x.png",
+        r"crops\..\x.png",
+        "https://host/x.png",
+        "crops/line\nbreak.png",
+    ],
+)
+def test_scene_rejects_invalid_crop_paths(tmp_path, crop):
+    unit = {"id": "b01", "bbox": [0, 0, 8, 8], "status": "rendered", "crop": crop}
+    scene = make_scene(tmp_path / "scene", units=[unit])
+    with pytest.raises(ValueError):
+        review_scenes.SceneRegistry().register(str(scene))
+
+
+@pytest.mark.parametrize(
+    ("name", "span"),
+    [
+        ("crops/c01%2Fp001%23dialog_1.png", "`crops/c01%2Fp001%23dialog_1.png`"),
+        ("crops/dialog_1.png", "`crops/dialog_1.png`"),
+        ("`dialog``_1.png", "``` `dialog``_1.png ```"),
+    ],
+)
+def test_feedback_saves_literal_crop_path_and_handles_later_malformed_crop(
+    tmp_path, dist, name, span
+):
+    unit = {"id": "b01", "bbox": [0, 0, 8, 8], "status": "rendered", "crop": name}
+    scene = make_scene(tmp_path / "scene", units=[unit])
+    with running(dist, scene) as (_, request):
+        submission = _submission("定位裁片")
+        submission["feedback"]["entries"][0]["unit_id"] = unit["id"]
+        assert _post(request, submission)[0] == 200
+        report = scene / "feedback.md"
+        assert f"- 对比图：{span}" in report.read_text(encoding="utf-8").splitlines()
+        path = scene / "review-manifest.json"
+        manifest = json.loads(path.read_bytes())
+        manifest["pages"][0]["units"][0]["crop"] = {"file": name}
+        path.write_text(json.dumps(manifest), encoding="utf-8")
+        assert _post(request, submission)[0] == 200
+        assert "- 对比图：" not in report.read_text(encoding="utf-8")
 
 
 CONTROL = {"Content-Type": "application/json", "X-Localization-Kit-Request": "1"}

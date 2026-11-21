@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { imageUrl, parseManifest } from "./manifest";
+import { imageUrl, parseManifest, renderParameters } from "./manifest";
 import mock from "../public/review-manifest.json";
 
 describe("review manifest", () => {
@@ -10,6 +10,27 @@ describe("review manifest", () => {
       bbox: [664, 486, 802, 545], status: "skipped", erase: "keep", protectedKind: "onomatopoeia",
     });
     expect(manifest.pages[1].baseline).toBeUndefined();
+    expect(manifest.pages[0].units[0].crop).toBeUndefined();
+  });
+
+  it.each(["lama", "patch"])("displays %s and retains the on-disk crop path", (erase) => {
+    const page = mock.pages[0];
+    const crop = "pages/c01/p001/crops/c01%2Fp001%23b05.png";
+    const [unit] = parseManifest({ ...mock, pages: [{
+      ...page, units: [{ ...page.units[0], erase, crop }],
+    }] }).pages[0].units;
+    expect(unit.crop).toBe(crop);
+    expect(renderParameters(unit)).toContainEqual(["擦字", erase]);
+  });
+
+  it.each([
+    null, 42, {}, "", "  ", "/abs.png", "\\rooted.png", "\\\\host\\share\\x.png",
+    "C:/abs.png", "C:drive.png", "../x.png", "crops/../x.png", "crops\\..\\x.png",
+    "https://host/x.png", "crops/line\nbreak.png",
+  ])("rejects invalid crop path %j", (crop) => {
+    const page = mock.pages[0];
+    expect(() => parseManifest({ ...mock, pages: [{ ...page, units: [{ ...page.units[0], crop }] }] }))
+      .toThrow();
   });
 
   it("preserves QA on protected regions and avoids duplicating skipped units", () => {

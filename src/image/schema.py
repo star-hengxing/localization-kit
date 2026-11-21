@@ -1,10 +1,11 @@
 import json
 import math
+import ntpath
 import re
 import tomllib
 from contextlib import contextmanager
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from shutil import rmtree
 from tempfile import NamedTemporaryFile, mkdtemp
 from time import sleep
@@ -20,6 +21,7 @@ UNIT_KEYS = STYLE_KEYS | {
     "direction",
     "font_size",
     "breaks",
+    "clean_patch",
     "protect_terms",
 }
 
@@ -68,12 +70,24 @@ def new_output(path: Path):
             rmtree(staged, ignore_errors=True)
 
 
-def source_image(project: Path, analysis: dict) -> Path:
-    path = Path(analysis["image"])
-    absolute = (project / path).resolve()
-    if path.anchor or not absolute.is_relative_to(project.resolve()):
-        raise ValueError("Analysis image must be relative to the work directory")
+def _relative_file(name, label):
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError(f"{label} must be a nonempty relative path")
+    path = PureWindowsPath(ntpath.normpath(name))
+    if path.anchor or path.parts[:1] == ("..",):
+        raise ValueError(f"{label} must be relative to the work directory")
+
+
+def work_file(project: Path, name: str, label: str) -> Path:
+    _relative_file(name, label)
+    absolute = (project / name).resolve()
+    if not absolute.is_relative_to(project.resolve()):
+        raise ValueError(f"{label} must be relative to the work directory")
     return absolute
+
+
+def source_image(project: Path, analysis: dict) -> Path:
+    return work_file(project, analysis["image"], "Analysis image")
 
 
 def box_slices(box, shape, pad=0):
@@ -100,14 +114,18 @@ def skip_unit(unit, override):
     return override.get("action") == "skip" or unit["kind"] in SFX_KINDS
 
 
-def check_box(box, size):
+def _box_coordinates(box):
     if (
         not isinstance(box, list)
         or len(box) != 4
         or any(type(n) is not int for n in box)
     ):
         raise ValueError(f"Invalid bounding box: {box!r}")
-    x0, y0, x1, y1 = box
+    return box
+
+
+def check_box(box, size):
+    x0, y0, x1, y1 = _box_coordinates(box)
     if not (0 <= x0 < x1 <= size[0] and 0 <= y0 < y1 <= size[1]):
         raise ValueError(f"Bounding box outside page: {box!r}")
 
@@ -190,6 +208,26 @@ def _style(table, allowed):
     if unknown:
         raise ValueError(f"Unknown image override keys: {', '.join(sorted(unknown))}")
     result = dict(table)
+    if "clean_patch" in table:
+        if "erase" in table:
+            raise ValueError("A unit cannot specify both clean_patch and erase")
+        patch = table["clean_patch"]
+        if not isinstance(patch, dict) or patch.keys() != {
+            "file",
+            "bbox",
+            "source_sha256",
+        }:
+            raise ValueError(
+                "clean_patch requires exactly file, bbox and source_sha256"
+            )
+        _relative_file(patch["file"], "clean_patch.file")
+        _box_coordinates(patch["bbox"])
+        digest = patch["source_sha256"]
+        if not isinstance(digest, str) or not re.fullmatch(r"[0-9A-Fa-f]{64}", digest):
+            raise ValueError(
+                "clean_patch.source_sha256 must be a 64-character SHA-256 hex digest"
+            )
+        result["clean_patch"] = {**patch, "source_sha256": digest.lower()}
     for key, options in (
         ("weight", WEIGHTS),
         ("erase", ERASE_MODES),

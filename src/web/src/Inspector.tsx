@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { unitTone } from "./CompareViewer";
 import { entryKey, isCurrentReview, parseBreaks, readOverrides, revisionKey, staleLabel, STATUS_LABELS, TAGS } from "./feedback";
 import type { FeedbackEntry, Overrides, ReviewFields, ReviewStatus } from "./feedback";
-import { PAGE_UNIT, renderParameters } from "./manifest";
+import { ERASE_MODES, PAGE_UNIT, renderParameters } from "./manifest";
 import type { Page, Unit } from "./manifest";
 
 const UNIT_LABELS = { rendered: "已嵌字", skipped: "已跳过", failed: "失败" } as const;
@@ -37,7 +37,7 @@ function Suggestions({ overrides, onChange }: { overrides: Overrides; onChange: 
     <div className="suggestion-fields">
       <label>擦字模式
         <select value={overrides.erase ?? ""} onChange={(event) => update("erase", event.target.value)}>
-          <option value="">—</option><option>auto</option><option>flat</option><option>telea</option><option>keep</option>
+          <option value="">—</option>{ERASE_MODES.map((mode) => <option key={mode}>{mode}</option>)}
         </select>
       </label>
       <label>字重

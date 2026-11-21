@@ -12,9 +12,19 @@ def _inline(text):
     return re.sub(r"(?<!\S)#+$", lambda m: "&#35;" * len(m[0]), text)
 
 
-def _fenced(text):
+def _backticks(text, minimum):
     longest = max((len(s) for s in re.findall(r"`+", text)), default=0)
-    fence = "`" * max(3, longest + 1)
+    return "`" * max(minimum, longest + 1)
+
+
+def _code_span(text):
+    fence = _backticks(text, 1)
+    pad = " " if text.startswith(("`", " ")) or text.endswith(("`", " ")) else ""
+    return f"{fence}{pad}{text}{pad}{fence}"
+
+
+def _fenced(text):
+    fence = _backticks(text, 3)
     return f"{fence}\n{text}\n{fence}"
 
 
@@ -71,6 +81,9 @@ def _unit_details(unit):
         f"- 渲染状态：{_inline(unit['status'])}",
         "- 坐标：" + ", ".join(map(str, unit["bbox"])),
     ]
+    crop = unit.get("crop")
+    if isinstance(crop, str) and crop.strip():
+        lines.append("- 对比图：" + _code_span(crop))
     parameters = []
     for key, label in (
         ("erase", "擦字"),

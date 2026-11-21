@@ -26,17 +26,21 @@ def _normalize_translations(translations):
     }
 
 
-def fingerprint(original, analysis, translations, overrides, rendered):
+def fingerprint(
+    original, analysis, translations, overrides, rendered, patch_hashes=None
+):
     digest = hashlib.sha256()
     parts = {"original": original, "rendered": rendered}
-    for name, value in (
-        ("analysis", {k: v for k, v in analysis.items() if k != "max_unit_num"}),
-        (
-            "translations",
-            _normalize_translations(page_translations(analysis["units"], translations)),
+    records = {
+        "analysis": {k: v for k, v in analysis.items() if k != "max_unit_num"},
+        "translations": _normalize_translations(
+            page_translations(analysis["units"], translations)
         ),
-        ("overrides", overrides),
-    ):
+        "overrides": overrides,
+    }
+    if patch_hashes:
+        records["clean_patches"] = patch_hashes
+    for name, value in records.items():
         parts[name] = json.dumps(
             value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
         ).encode("utf-8")
@@ -391,6 +395,7 @@ def review_manifest(analysis, qa, images, original_data=None):
                 "src",
                 "dst",
                 "erase",
+                "crop",
                 "weight",
                 "direction",
                 "color",

@@ -7,7 +7,7 @@ export const STATUS_LABELS = { approved: "通过", problem: "有问题", pending
 export type ReviewStatus = keyof typeof STATUS_LABELS;
 
 export interface Overrides {
-  erase?: Erase;
+  erase?: Exclude<Erase, "patch">;
   weight?: Weight;
   font_size?: number;
   breaks?: string[];
@@ -78,7 +78,7 @@ export function staleLabel(entry: FeedbackEntry): string {
 export function readOverrides(value: unknown): Overrides {
   if (!isRecord(value)) return {};
   const result: Overrides = {};
-  if (isErase(value.erase)) result.erase = value.erase;
+  if (isErase(value.erase) && value.erase !== "patch") result.erase = value.erase;
   if (isWeight(value.weight)) result.weight = value.weight;
   if (typeof value.font_size === "number" && Number.isSafeInteger(value.font_size) && value.font_size > 0) {
     result.font_size = value.font_size;
@@ -239,10 +239,20 @@ function mdInline(text: string): string {
     .replace(/(^|\s)(#+)$/g, (_, prefix: string, hashes: string) => prefix + "&#35;".repeat(hashes.length));
 }
 
-function fenced(text: string): string {
-  let longest = 2;
+function backticks(text: string, minimum: number): string {
+  let longest = 0;
   for (const match of text.matchAll(/`+/g)) longest = Math.max(longest, match[0].length);
-  const fence = "`".repeat(longest + 1);
+  return "`".repeat(Math.max(minimum, longest + 1));
+}
+
+function codeSpan(text: string): string {
+  const fence = backticks(text, 1);
+  const pad = /^[` ]|[` ]$/.test(text) ? " " : "";
+  return fence + pad + text + pad + fence;
+}
+
+function fenced(text: string): string {
+  const fence = backticks(text, 3);
   return `${fence}\n${text}\n${fence}`;
 }
 
@@ -283,6 +293,7 @@ export function feedbackMarkdown(manifest: Manifest, feedback: FeedbackDocument)
       if (unit) {
         lines.push(`- 渲染状态：${unit.status}`, `- 坐标：${unit.bbox.join(", ")}`,
           `- ${renderParameters(unit).map(([label, value]) => `${label}：${value}`).join(" · ")}`);
+        if (unit.crop) lines.push(`- 对比图：${codeSpan(unit.crop)}`);
         if (unit.columns.length) lines.push("- 列划分", ...unit.columns.map((column) => `  - ${mdInline(column)}`));
         if (unit.qa_issues.length) lines.push("- 单元 QA", ...unit.qa_issues.map((issue) => `  - ${mdInline(issue)}`));
         lines.push("", "**原文**", "", fenced(unit.src ?? ""), "", "**译文**", "", fenced(unit.dst ?? ""));

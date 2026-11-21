@@ -1,9 +1,12 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { entryKey, feedbackIndex, feedbackMarkdown, hasOverrides, hasUnsavedFeedback, isCurrentReview, mergeFeedback, overridesToml, parseBreaks, parseFeedback, updateFeedback } from "./feedback";
+import { entryKey, feedbackIndex, feedbackMarkdown, hasOverrides, hasUnsavedFeedback, isCurrentReview, mergeFeedback, overridesToml, parseBreaks, parseFeedback, readOverrides, updateFeedback } from "./feedback";
 import type { FeedbackDocument } from "./feedback";
 import { PAGE_UNIT, parseManifest } from "./manifest";
+import { Inspector } from "./Inspector";
 import mock from "../public/review-manifest.json";
 
 const manifest = parseManifest(mock);
@@ -74,6 +77,17 @@ describe("feedback state", () => {
     });
     expect(parseFeedback(initial).entries[0].overrides).toEqual({ stroke: false, stroke_width: 0 });
   });
+
+  it("offers and exports LaMa, and keeps patch display-only", () => {
+    const html = renderToStaticMarkup(createElement(Inspector, {
+      page, selectedId: first.id, feedback: new Map(), disabled: false, onSelect() {}, onChange() {},
+    }));
+    expect(html).toMatch(/<option\b[^>]*>lama<\/option>/);
+    expect(html).not.toMatch(/<option\b[^>]*>patch<\/option>/);
+    expect(readOverrides({ erase: "patch" })).toEqual({});
+    const overrides = readOverrides({ erase: "lama" });
+    expect(overridesToml(page, update(empty, page, first.id, { overrides }))).toContain('erase = "lama"');
+  });
 });
 
 describe("Markdown export", () => {
@@ -82,13 +96,14 @@ describe("Markdown export", () => {
     const pageFeedback = update(empty, page, PAGE_UNIT, { status: "approved" });
     const withSecond = update(pageFeedback, page, second.id, { tags: ["擦字"], note });
     const final = update(withSecond, page, first.id, { status: "problem" });
-    const styled = { ...second, color: [0, 0, 0] as const, stroke: "#FFFFFF", stroke_width: 2, direction: "v" as const };
+    const styled = { ...second, crop: "crops/dialog_1.png", color: [0, 0, 0] as const, stroke: "#FFFFFF", stroke_width: 2, direction: "v" as const };
     const text = feedbackMarkdown({ ...manifest, pages: [{ ...page, units: [first, styled] }, manifest.pages[1]] }, final);
     expect(text).toContain(`## ${page.id}`);
     expect(text.indexOf("整页（`__page__`）")).toBeLessThan(text.indexOf(`### ${first.id}`));
     expect(text.indexOf(`### ${first.id}`)).toBeLessThan(text.indexOf(`### ${second.id}`));
     expect(text).toContain("- 审核状态：通过");
     expect(text).toContain("- 问题标签：擦字");
+    expect(text.split("\n")).toContain("- 对比图：`crops/dialog_1.png`");
     expect(text).toContain("- 擦字：telea · 字重：bold · 字号：31 px · 字色：#000000 · 描边：#FFFFFF · 描边宽度：2 px · 方向：竖排");
     expect(text).toContain(second.src);
     expect(text).toContain(second.dst);
@@ -97,6 +112,13 @@ describe("Markdown export", () => {
     expect(text).toContain(page.fingerprint);
     expect(text).toContain(["````", note, "````"].join("\n"));
     expect(text).not.toContain(`## ${manifest.pages[1].id}`);
+  });
+
+  it("preserves percent escapes and backticks in copyable crop paths", () => {
+    const crop = "`c01%2Fp001%23dialog``_1.png";
+    const feedback = update(empty, page, first.id, { note: "定位裁片" });
+    const text = feedbackMarkdown({ ...manifest, pages: [{ ...page, units: [{ ...first, crop }] }] }, feedback);
+    expect(text.split("\n")).toContain("- 对比图：``` `c01%2Fp001%23dialog``_1.png ```");
   });
 
   it("flags stale approvals after a rerender and retains their original fingerprint", () => {

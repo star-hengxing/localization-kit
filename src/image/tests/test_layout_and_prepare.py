@@ -84,6 +84,28 @@ def test_free_text_grouping_keeps_ogkalu_bubbles_apart():
     ]
 
 
+def test_free_text_units_twelve_pixels_apart_keep_neighboring_strokes(tmp_path):
+    image = Image.new("RGB", (180, 120), "white")
+    draw = ImageDraw.Draw(image)
+    boxes = [[30, 35, 60, 76], [72, 35, 102, 76]]
+    for x, y, _, bottom in boxes:
+        draw.rectangle((x + 10, y, x + 13, bottom - 1), fill="black")
+    draw.line((65, 23, 65, 88), fill="black", width=2)
+    image.save(tmp_path / "original.png")
+    analysis = assemble_page(
+        "p1", image, [_instance(image.size, "text", box) for box in boxes]
+    )
+    units = analysis["units"]
+    assert len(units) == 2 and all(unit["kind"] == "free" for unit in units)
+    out = tmp_path / "review"
+    qa = render_page(tmp_path, analysis, {u["id"]: "甲" for u in units}, {}, out)
+    assert qa["pass"] and qa["coverage"]["rendered"] == 2
+    with Image.open(out / "rendered.png") as rendered:
+        np.testing.assert_array_equal(
+            np.asarray(rendered)[:, 60:72], np.asarray(image)[:, 60:72]
+        )
+
+
 def test_ink_projection_finds_horizontal_lines_in_a_nearly_square_block():
     image = Image.new("RGB", (160, 150), "white")
     boxes = [[42, y, 101, y + 10] for y in (35, 56, 77)]

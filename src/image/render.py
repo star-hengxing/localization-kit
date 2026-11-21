@@ -1,6 +1,7 @@
 import hashlib
 import json
 import re
+from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path, PureWindowsPath
 from urllib.parse import quote
@@ -10,6 +11,7 @@ import numpy as np
 from PIL import Image
 
 from .bridge import latin_terms, mark_emphasis, translatable
+from .clean_patch import CleanPatch, load_clean_patches, stage_clean_patch
 from .erase import LUMA, distance, erase_text, grow, inspect_region, white_composite
 from .ocr import JP_RE
 from .project import load_manifest, resolve_pages
@@ -160,7 +162,7 @@ def _pair(left, right):
     return result
 
 
-def _protected(analysis, styles, masks, shape):
+def _protected(analysis, styles, masks, texts, shape):
     entries = []
     for entry in analysis["skipped"]:
         summary = {"kind": entry["kind"], "bbox": entry["bbox"]}
@@ -170,9 +172,10 @@ def _protected(analysis, styles, masks, shape):
     for unit in analysis["units"]:
         unit_id = unit["id"]
         if skip_unit(unit, styles.get(unit_id, {})):
-            entries.append(
-                ({key: unit[key] for key in ("id", "kind", "bbox")}, masks[unit_id])
-            )
+            mask = masks[unit_id]
+            if unit_id in texts:
+                mask = mask | texts[unit_id]
+            entries.append(({key: unit[key] for key in ("id", "kind", "bbox")}, mask))
     union = np.zeros(shape, dtype=bool)
     for _, mask in entries:
         union |= mask
@@ -180,7 +183,7 @@ def _protected(analysis, styles, masks, shape):
 
 
 def _render_unit(
-    image, unit, region, text_mask, translation, defaults, override, inpaint_fn
+    image, unit, region, text_mask, translation, defaults, override, inpaint_fn, patch
 ):
     report = {"id": unit["id"], "status": "failed", "overflow": False}
     ocr = unit.get("ocr") or {}
@@ -205,6 +208,9 @@ def _render_unit(
     if not unit.get("text"):
         report["reason"] = "missing source text geometry"
         return report, None
+    if isinstance(patch, str):
+        report["reason"] = patch
+        return report, None
 
     style = {**_auto_style(unit, region), **defaults, **override}
     font_px = style["font_px"]
@@ -216,13 +222,20 @@ def _render_unit(
         and "weight" not in override
     ):
         font = PIXEL_FONTS[pixel_dots]
-    if style["erase"] != "keep" and np.any(region.ink & text_mask & ~region.erase_safe):
-        report["reason"] = "source text overlaps protected artwork"
-        return report, None
-    cleaned = erase_text(image, region, font_px, style["erase"], inpaint_fn=inpaint_fn)
+    if patch is not None:
+        cleaned = patch.cleaned
+    else:
+        if style["erase"] != "keep" and np.any(
+            region.ink & text_mask & ~region.erase_safe
+        ):
+            report["reason"] = "source text overlaps protected artwork"
+            return report, None
+        cleaned = erase_text(
+            image, region, font_px, style["erase"], inpaint_fn=inpaint_fn
+        )
     report.update(
         erase=cleaned.mode,
-        erase_pixels=int(cleaned.mask.sum()),
+        erase_pixels=0 if patch is not None else int(cleaned.mask.sum()),
         needs_external_inpaint=cleaned.needs_external_inpaint,
         background={
             "p95_p5": round(region.spread, 2),
@@ -251,7 +264,12 @@ def _render_unit(
     if alpha is None:
         report["reason"] = "font does not support one or more glyphs"
         return report, None
-    rendered = _apply(cleaned.pixels, alpha, stroke, style["color"], style["stroke"])
+    background = cleaned.pixels if patch is None else patch.glyph_background
+    rendered = _apply(background, alpha, stroke, style["color"], style["stroke"])
+    if patch is not None:
+        report.update(
+            clean_patch=patch.metadata, erase_pixels=patch.metadata["changed_pixels"]
+        )
     report.update(
         status="rendered",
         size=layout.size,
@@ -259,9 +277,9 @@ def _render_unit(
         heavy_glyphs=sum(
             g.font == FONTS["heavy"] and g.text.strip() != "" for g in layout.glyphs
         ),
-        erasure_boundary=erasure_boundary(
-            image, cleaned.pixels, cleaned.mask, region.erase_safe
-        ),
+        erasure_boundary=patch.boundary
+        if patch is not None
+        else erasure_boundary(image, cleaned.pixels, cleaned.mask, region.erase_safe),
     )
     return report, (rendered, cleaned, layout, alpha, stroke)
 
@@ -286,20 +304,30 @@ def _write_review_png(path, image, png_data):
         path.write_bytes(png_data)
 
 
-def _compose_page(pixels, analysis, translations, styles, inpaint_fn, readback_fn):
-    output = pixels.copy()
-    cleaned_page = pixels.copy()
-    plans = {}
-    shape = pixels.shape[:2]
-    units = sorted(analysis["units"], key=lambda unit: unit.get("order") or 0)
-    masks = {unit["id"]: entry_mask(unit, shape) for unit in units}
-    texts = {
-        unit["id"]: entry_mask(unit["text"], shape)
-        for unit in units
-        if unit.get("text")
-    }
+@dataclass(frozen=True)
+class RenderInputs:
+    translations: dict
+    styles: dict
+    patches: dict[str, CleanPatch | str]
+    patch_hashes: dict[str, str]
+
+
+def load_render_inputs(
+    project_dir,
+    analysis,
+    translations,
+    overrides,
+    original_sha256,
+    *,
+    allow_short_ids=True,
+):
+    units = analysis["units"]
+    styles = validate_overrides(overrides, units)
     translations = {
-        k: {"dst": v} if isinstance(v, str) else v for k, v in translations.items()
+        k: {"dst": v} if isinstance(v, str) else v
+        for k, v in page_translations(
+            units, translations, allow_short_ids=allow_short_ids
+        ).items()
     }
     for unit in units:
         uid = unit["id"]
@@ -313,14 +341,42 @@ def _compose_page(pixels, analysis, translations, styles, inpaint_fn, readback_f
             and not translatable(ocr.get("text", ""))
         ):
             styles["units"][uid] = {**override, "action": "skip"}
-    protected, skipped = _protected(analysis, styles["units"], masks, shape)
+    patches, hashes = load_clean_patches(
+        project_dir, analysis, styles["units"], original_sha256
+    )
+    return RenderInputs(translations, styles, patches, hashes)
+
+
+def _claim_pixels(owners, mask, owner):
+    # Zero is unowned. Pixels claimed by multiple units stay shared (-1).
+    previous = owners[mask]
+    owners[mask] = np.where((previous == 0) | (previous == owner), owner, -1)
+
+
+def _compose_page(pixels, analysis, inputs, inpaint_fn, readback_fn):
+    styles = inputs.styles
+    output = pixels.copy()
+    cleaned_page = pixels.copy()
+    plans = {}
+    shape = pixels.shape[:2]
+    units = sorted(analysis["units"], key=lambda unit: unit.get("order") or 0)
+    masks = {unit["id"]: entry_mask(unit, shape) for unit in units}
+    texts = {
+        unit["id"]: entry_mask(unit["text"], shape)
+        for unit in units
+        if unit.get("text")
+    }
+    protected, skipped = _protected(analysis, styles["units"], masks, texts, shape)
     skip_margin = grow(protected, 2)
     outlines = np.zeros(shape, dtype=bool)
+    if inputs.patches:
+        edge_owners = np.zeros(shape, dtype=np.int32)
+        text_owners = np.zeros_like(edge_owners)
     regions = {}
     text_count = np.zeros(shape, np.uint16)
     for text in texts.values():
         text_count += text
-    for unit in units:
+    for owner, unit in enumerate(units, 1):
         uid = unit["id"]
         if uid in texts and not skip_unit(unit, styles["units"].get(uid, {})):
             roi = box_slices(unit["bbox"], shape, 6)
@@ -336,10 +392,14 @@ def _compose_page(pixels, analysis, translations, styles, inpaint_fn, readback_f
             )
             regions[uid] = region
             outlines[roi] |= region.edge
+            if inputs.patches:
+                _claim_pixels(edge_owners[roi], region.edge, owner)
+                _claim_pixels(text_owners, texts[uid], owner)
+                _claim_pixels(text_owners[roi], region.ink, owner)
 
     allowed = np.zeros(shape, dtype=bool)
     reports = []
-    for unit in units:
+    for owner, unit in enumerate(units, 1):
         unit_id = unit["id"]
         roi = box_slices(unit["bbox"], shape, 6)
         region = regions.get(unit_id)
@@ -347,6 +407,21 @@ def _compose_page(pixels, analysis, translations, styles, inpaint_fn, readback_f
             available = ~(outlines[roi] | allowed[roi])
             region.safe[:] &= available
             region.erase_safe[:] &= available
+        patch = inputs.patches.get(unit_id)
+        if isinstance(patch, CleanPatch) and region is not None:
+            try:
+                patch = stage_clean_patch(
+                    patch,
+                    pixels,
+                    roi,
+                    skip_margin=skip_margin,
+                    text_owners=text_owners,
+                    edge_owners=edge_owners,
+                    owner=owner,
+                    allowed=allowed,
+                )
+            except ValueError as exc:
+                patch = f"clean_patch {patch.file}: {exc}"
         unit_inpaint = None
         if inpaint_fn is not None:
 
@@ -361,10 +436,11 @@ def _compose_page(pixels, analysis, translations, styles, inpaint_fn, readback_f
             unit,
             region,
             texts[unit_id][roi] & masks[unit_id][roi] if unit_id in texts else None,
-            translations.get(unit_id, {}),
+            inputs.translations.get(unit_id, {}),
             styles["defaults"],
             styles["units"].get(unit_id, {}),
             unit_inpaint,
+            patch,
         )
         name = quote(unit_id, safe="")
         if len(name) > 240 or PureWindowsPath(name).is_reserved():
@@ -373,11 +449,18 @@ def _compose_page(pixels, analysis, translations, styles, inpaint_fn, readback_f
         reports.append(report)
         if composition is not None:
             rendered, cleaned, layout, alpha, stroke = composition
-            affected = (stroke > 0) | cleaned.mask
-            plans[unit_id] = GlyphPlan(roi, layout, alpha > 0, stroke > 0)
-            cleaned_page[roi][cleaned.mask] = cleaned.pixels[cleaned.mask]
-            output[roi][affected] = rendered[affected]
-            allowed[roi] |= affected
+            glyphs = stroke > 0
+            plans[unit_id] = GlyphPlan(roi, layout, alpha > 0, glyphs)
+            repair_roi = roi if patch is None else patch.roi
+            repair = cleaned.mask
+            replacement = cleaned.pixels[repair]
+            cleaned_page[repair_roi][repair] = replacement
+            output[repair_roi][repair] = replacement
+            output[roi][glyphs] = rendered[glyphs]
+            allowed[repair_roi] |= repair
+            allowed[roi] |= glyphs
+            if patch is not None:
+                outlines[repair_roi] &= ~(repair & (edge_owners[repair_roi] == owner))
 
     rendered = Image.fromarray(output)
     qa = verify_page(
@@ -415,16 +498,21 @@ def _render_page(
     readback_fn=None,
 ):
     validate_analysis(analysis)
-    styles = validate_overrides(overrides, analysis["units"])
     original_data = source_image(project_dir, analysis).read_bytes()
+    original_sha256 = hashlib.sha256(original_data).hexdigest()
     original, original_is_png = _page_image(original_data)
     if list(original.size) != analysis["size"]:
         raise ValueError("Image dimensions do not match analysis")
-    translations = page_translations(
-        analysis["units"], translations, allow_short_ids=allow_short_ids
+    inputs = load_render_inputs(
+        project_dir,
+        analysis,
+        translations,
+        overrides,
+        original_sha256,
+        allow_short_ids=allow_short_ids,
     )
     rendered, qa = _compose_page(
-        np.asarray(original), analysis, translations, styles, inpaint_fn, readback_fn
+        np.asarray(original), analysis, inputs, inpaint_fn, readback_fn
     )
     images = {
         "original": "original.png",
@@ -450,15 +538,19 @@ def _render_page(
     qa["fingerprint"] = fingerprint(
         original_data,
         analysis,
-        translations,
+        inputs.translations,
         overrides,
         rendered_path.read_bytes(),
+        patch_hashes=inputs.patch_hashes,
     )
     _pair(original, rendered).save(staging / "compare.png")
     (staging / "crops").mkdir()
     boxes = {unit["id"]: tuple(unit["bbox"]) for unit in analysis["units"]}
     for report in qa["units"]:
         box = boxes[report["id"]]
+        if patch := report.get("clean_patch"):
+            x0, y0, x1, y1 = patch["bbox"]
+            box = min(box[0], x0), min(box[1], y0), max(box[2], x1), max(box[3], y1)
         _pair(original.crop(box), rendered.crop(box)).save(staging / report["crop"])
     write_json(staging / "qa.json", qa)
     manifest = review_manifest(analysis, qa, images, original_data=original_data)
@@ -535,12 +627,14 @@ def render_project(
                 work.translations,
                 work.overrides,
                 output,
-                allow_short_ids=False,
+                allow_short_ids=translations is None,
                 inpaint_fn=inpaint_fn,
                 readback_fn=readback_fn,
             )
             for key in ("original", "rendered", "compare"):
                 page[key] = (rel / page[key]).as_posix()
+            for unit in page["units"]:
+                unit["crop"] = (rel / unit["crop"]).as_posix()
             review["pages"].append(page)
             summary["pass"] &= qa["pass"]
             for key, count in qa["coverage"].items():
