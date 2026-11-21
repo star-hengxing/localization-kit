@@ -1,0 +1,94 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "localization-kit 作品配置",
+  "description": "作品目录中的 config.toml。初始化后可以先登记原文，调用模型时再填写 models。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "adapter",
+    "input"
+  ],
+  "properties": {
+    "adapter": {
+      "type": "string",
+      "enum": [
+        "artc",
+        "vtt",
+        "jsonl"
+      ],
+      "description": "原文格式。"
+    },
+    "input": {
+      "type": "string",
+      "minLength": 1,
+      "description": "作品 source/ 内的原文路径。相对路径以作品目录为起点。",
+      "examples": [
+        "source",
+        "source/input.jsonl"
+      ]
+    },
+    "model": {
+      "type": "string",
+      "description": "默认模型名称，对应 models 下的表名。只有一个模型时可省略。"
+    },
+    "glossaries": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "启用的术语表路径。省略或留空时使用已有的 materials/glossary.json。"
+    },
+    "cards": {
+      "type": "string",
+      "description": "润色和校对使用的角色卡路径。省略时使用 materials/characters.json 中已填写的角色卡。"
+    },
+    "log_level": {
+      "type": "string",
+      "default": "info",
+      "description": "日志级别。",
+      "examples": [
+        "debug",
+        "info",
+        "warn",
+        "error"
+      ]
+    },
+    "models": {
+      "type": "object",
+      "description": "按名称登记模型。比如 models.translate 下的 model 是部署返回的实际模型 ID。",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "url",
+          "model"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https?://",
+            "description": "模型 API 地址，可包含 /v1，省略用户名、密码、查询参数和片段。",
+            "examples": [
+              "http://127.0.0.1:8888"
+            ]
+          },
+          "model": {
+            "type": "string",
+            "minLength": 1,
+            "description": "部署提供的实际模型 ID。"
+          },
+          "profile": {
+            "type": "string",
+            "enum": [
+              "",
+              "hy-mt2",
+              "opensakura"
+            ],
+            "description": "初翻使用的模型协议。只用于术语、角色卡、润色或校对的模型可省略。"
+          }
+        }
+      }
+    }
+  }
+}

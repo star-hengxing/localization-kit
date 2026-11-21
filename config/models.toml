@@ -1,0 +1,13 @@
+adapter = "jsonl"
+input = "source/input.jsonl"
+model = "hy-mt2"
+
+[models.hy-mt2]
+url = "http://127.0.0.1:8888"
+model = "tencent/Hy-MT2-30B-A3B-GGUF"
+profile = "hy-mt2"
+
+[models.opensakura]
+url = "http://127.0.0.1:8888"
+model = "mradermacher/OpenSakura-MODEL-260906-LN-ja-zh-SFT-qwen36-35b-a3b-sft-GGUF"
+profile = "opensakura"

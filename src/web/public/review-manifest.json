@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "title": "样例 · 深夜电台",
+  "pages": [
+    {
+      "id": "demo/p001",
+      "width": 900,
+      "height": 680,
+      "original": "mock/p001-original.png",
+      "rendered": "mock/p001-rendered.png",
+      "baseline": "mock/p001-baseline.png",
+      "fingerprint": "712572196c34b41b83bd7d5614b201002c42b30253d63d9835bcec892342563d",
+      "qa": { "pass": false, "issues": ["b02 检测到擦字边界跳变"] },
+      "units": [
+        {
+          "id": "demo/p001#b01",
+          "bbox": [544, 76, 846, 220],
+          "status": "rendered",
+          "erase": "flat",
+          "weight": "medium",
+          "font_size": 31,
+          "columns": ["晚上好。", "今晚的电台也开播啦。"],
+          "src": "こんばんは。今夜も放送します。",
+          "dst": "晚上好。今晚的电台也开播啦。",
+          "qa_issues": []
+        },
+        {
+          "id": "demo/p001#b02",
+          "bbox": [87, 450, 435, 610],
+          "status": "rendered",
+          "erase": "telea",
+          "weight": "bold",
+          "font_size": 31,
+          "columns": ["收得到吗？", "我在听。"],
+          "src": "聞こえますか？聞いてるよ。",
+          "dst": "收得到吗？我在听。",
+          "qa_issues": ["擦字区域右侧存在明显色阶"]
+        }
+      ],
+      "skipped": [{ "kind": "onomatopoeia", "bbox": [664, 486, 802, 545] }]
+    },
+    {
+      "id": "demo/p002",
+      "width": 900,
+      "height": 680,
+      "original": "mock/p002-original.png",
+      "rendered": "mock/p002-rendered.png",
+      "fingerprint": "6a903c5cc1baba24d87bc9fab1a0387054feda69c30f684fe1998430877492f6",
+      "qa": { "pass": true, "issues": [] },
+      "units": [
+        {
+          "id": "demo/p002#b01",
+          "bbox": [505, 124, 841, 268],
+          "status": "rendered",
+          "erase": "flat",
+          "weight": "regular",
+          "font_size": 31,
+          "columns": ["明晚见。", "别忘了关灯。"],
+          "src": "また明日。電気を消してね。",
+          "dst": "明晚见。别忘了关灯。",
+          "qa_issues": []
+        },
+        {
+          "id": "demo/p002#b02",
+          "bbox": [124, 460, 326, 575],
+          "status": "skipped",
+          "erase": "keep",
+          "columns": [],
+          "src": "AM 01:20",
+          "qa_issues": []
+        }
+      ],
+      "skipped": []
+    }
+  ]
+}

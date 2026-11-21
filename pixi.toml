@@ -1,0 +1,133 @@
+[workspace]
+name = "localization-kit"
+version = "0.1.0"
+channels = ["conda-forge"]
+platforms = ["win-64", "linux-64"]
+
+[dependencies]
+go = "1.27.*"
+ruff = "*"
+tombi = "==0.10.0"
+
+[feature.image.dependencies]
+python = "3.12.*"
+pillow = "*"
+pytest = "*"
+
+[feature.image.pypi-dependencies]
+numpy = "*"
+opencv-python-headless = "*"
+uharfbuzz = "*"
+freetype-py = "*"
+jieba = "*"
+
+[feature.image.tasks]
+download-fonts = "python scripts/download_fonts.py"
+test-py = 'PYTHONPATH="$PIXI_PROJECT_ROOT" pytest src -q'
+
+[feature.image-gpu]
+platforms = ["win-64", "linux-64"]
+
+[feature.image-gpu.pypi-dependencies]
+torch = { version = ">=2.14", index = "https://download.pytorch.org/whl/cu130" }
+torchvision = { version = "*", index = "https://download.pytorch.org/whl/cu130" }
+rfdetr = "==1.7.0"
+transformers = "*"
+pyyaml = "*"
+onnxruntime-gpu = "*"
+safetensors = "*"
+
+[feature.web.dependencies]
+nodejs = "==26.13.0"
+pnpm = "==12.18.0"
+
+[feature.web.tasks]
+web-install = "pnpm --dir src/web install --frozen-lockfile"
+web-typecheck = "pnpm --dir src/web run typecheck"
+web-test = "pnpm --dir src/web run test"
+web-build = "pnpm --dir src/web run build"
+web-dev = "pnpm --dir src/web run dev"
+
+[environments]
+image = ["image"]
+image-gpu = ["image", "image-gpu"]
+web = { features = ["web"], no-default-feature = true }
+
+# Use Pixi's Go toolchain and keep builds independent of a host C compiler.
+[activation.env]
+GOTOOLCHAIN = "local"
+CGO_ENABLED = "0"
+
+# ============================================================================== #
+#                              BUILD AND PACKAGING                               #
+# ============================================================================== #
+
+# GOEXE follows the Go target, so every task agrees on the binary's filename.
+[tasks.build]
+description = "构建 localization-kit 可执行文件"
+cmd = 'go build -trimpath -ldflags="-s -w" -o "build/localization-kit$(go env GOEXE)" ./src/cmd'
+
+[tasks.localization-kit]
+description = "运行 localization-kit 命令"
+cmd = '"$PIXI_PROJECT_ROOT/build/localization-kit$(go env GOEXE)"'
+depends-on = ["build"]
+
+[tasks.package]
+description = "构建便携包"
+cmd = "go run ./src/cmd/package"
+depends-on = ["build"]
+
+# ============================================================================== #
+#                                     TESTS                                      #
+# ============================================================================== #
+
+[tasks.test]
+description = "运行 Go 测试"
+depends-on = ["test-go"]
+
+[tasks.test-go]
+description = "运行 Go 单元测试和集成测试"
+cmd = "go test ./..."
+
+# Go runs each test package in its own directory. Give the tests an absolute
+# path so they can launch the same binary from any fixture workspace.
+[tasks.test-cli]
+description = "运行含跨进程用例的 CLI 测试"
+cmd = 'LOCALIZATION_KIT_TEST_BINARY="$PIXI_PROJECT_ROOT/build/localization-kit$(go env GOEXE)" go test -count=1 ./src/internal/cli'
+depends-on = ["build"]
+
+# ============================================================================== #
+#                          FORMATTING AND STATIC CHECKS                          #
+# ============================================================================== #
+
+[tasks.lint]
+description = "格式化并检查 Go、Python 代码和 TOML 配置"
+depends-on = ["format", "lint-go", "lint-py", "lint-toml"]
+
+[tasks.lint-go]
+description = "运行 Go 静态分析"
+cmd = "go vet ./..."
+
+[tasks.lint-py]
+description = "运行 Python 静态分析"
+cmd = "ruff check src scripts"
+
+[tasks.lint-toml]
+description = "检查 TOML 配置"
+cmd = "tombi lint pixi.toml"
+
+[tasks.format]
+description = "格式化 Go、Python 代码和 TOML 配置"
+depends-on = ["format-go", "format-py", "format-toml"]
+
+[tasks.format-go]
+description = "格式化 Go 代码"
+cmd = "go fmt ./..."
+
+[tasks.format-py]
+description = "格式化 Python 代码"
+cmd = "ruff format src scripts"
+
+[tasks.format-toml]
+description = "格式化 TOML 配置"
+cmd = "tombi format pixi.toml"

@@ -1,0 +1,23 @@
+# 构建产物、作品和临时文件
+build/
+work/
+/tmp/
+*.exe
+*.test
+*.log
+
+# 本地环境和编辑器文件
+.pixi/
+.env
+.env.*
+!.env.example
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+
+# 外部下载的字体二进制（通过 scripts/download_fonts.py 获取）
+data/fonts/*.otf
